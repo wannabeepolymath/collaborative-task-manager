@@ -1,198 +1,81 @@
-# TeamTasks - Collaborative Todo App
+# TeamTasks: Advanced DevOps project
 
-A task management app that lets you keep track of personal todos and collaborate with others on shared tasks. Built with React Native (Expo) for the frontend and FastAPI for the backend.
+TeamTasks is a React Native/Expo web client and FastAPI API for personal and shared tasks, backed by MongoDB. This PR turns the preserved application into a reproducible local Kubernetes deployment.
 
-## Features
+- Student: Daksh Jain, 23bcs10125.
+- Baseline: [`cc8902b66535d5ef475ee9be153a3af2b205abb5`](https://github.com/wannabeepolymath/collaborative-task-manager/commit/cc8902b66535d5ef475ee9be153a3af2b205abb5).
+- All course improvements are on one PR. The PR head and CI evidence identify the final revision; do not merge or rewrite the baseline before review.
+- [Architecture, decisions and limitations](docs/OPERATIONS.md).
+- [Validation evidence](docs/EVIDENCE.md).
 
-- **Email/Password Authentication** - Register and login with email and password
-- **Google Sign-In** (Optional) - Sign in with Google account
-- **Personal Tasks** - Create, edit, delete your own todos with status and priority
-- **Groups** - Create groups and invite others via email
-- **Collaborative Tasks** - Group tasks that everyone can see and manage
-- **Task Assignment** - Assign tasks to specific group members
-- **Role-based Access** - Owner, Admin, Member, Viewer roles with different permissions
-- **Real-time Status** - Track tasks from "todo" to "in progress" to "done"
+## Prerequisites
 
-## Tech Stack
+Docker Engine with at least 4 GB available, Git, Python 3.12, kubectl with Kustomize, and Minikube (Docker driver). No cloud account is required. Ports 8080, 9090 and 16686 must be free. The CI runner uses kind instead of Minikube. Native mobile builds and Google OAuth are outside the tested deployment; email/password login is the supported demo path.
 
-- **Frontend:** React Native (Expo), TypeScript, Zustand, Axios
-- **Backend:** FastAPI, Motor (async MongoDB), JWT Authentication
-- **Database:** MongoDB
+## Build and deploy locally
 
-## Project Structure
-
-```
-├── backend/           # FastAPI API server
-│   ├── server.py      # Main API with all routes
-│   ├── requirements.txt
-│   └── .env           # Backend environment variables
-├── frontend/          # React Native (Expo) app
-│   ├── app/           # Expo Router screens
-│   ├── src/           # Components, stores, API client
-│   └── .env           # Frontend environment variables
-├── Dockerfile         # Production Docker image
-├── docker-compose.yml # Docker Compose for easy deployment
-├── nginx.conf         # Nginx configuration
-└── supervisord.conf   # Process manager configuration
-```
-
-## Getting Started
-
-### Prerequisites
-
-- Node.js 18+
-- Python 3.11+
-- MongoDB (local or cloud)
-- Expo Go app (for mobile testing)
-
-### Local Development
-
-1. **Clone and install dependencies**
-
-   ```bash
-   # Backend
-   cd backend
-   python -m venv venv
-   source venv/bin/activate  # or `venv\Scripts\activate` on Windows
-   pip install -r requirements.txt
-
-   # Frontend
-   cd ../frontend
-   yarn install
-   ```
-
-2. **Configure environment variables**
-
-   Backend (`backend/.env`):
-   ```env
-   MONGO_URL="mongodb://localhost:27017"
-   DB_NAME="collaborative_todo"
-   JWT_SECRET="your-secret-key-change-in-production"
-   JWT_REFRESH_SECRET="your-refresh-secret-key"
-   # Optional: Google OAuth
-   GOOGLE_CLIENT_ID="your-google-client-id.apps.googleusercontent.com"
-   ```
-
-   Frontend (`frontend/.env`):
-   ```env
-   EXPO_PUBLIC_BACKEND_URL=http://localhost:8001
-   # Optional: Google OAuth Client IDs
-   EXPO_PUBLIC_GOOGLE_CLIENT_ID_WEB=your-web-client-id
-   EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS=your-ios-client-id
-   EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID=your-android-client-id
-   ```
-
-3. **Start MongoDB**
-
-   ```bash
-   # Using Docker
-   docker run -d -p 27017:27017 --name mongodb mongo:7
-   
-   # Or use your local MongoDB installation
-   ```
-
-4. **Run the application**
-
-   ```bash
-   # Terminal 1: Backend
-   cd backend
-   uvicorn server:app --host 0.0.0.0 --port 8001 --reload
-
-   # Terminal 2: Frontend
-   cd frontend
-   yarn start
-   ```
-
-5. **Access the app**
-   - Web: Open http://localhost:3000
-   - Mobile: Scan QR code with Expo Go app
-
-### Docker Deployment
+Run from the repository root. Keep `.local/runtime.env` private. It contains generated credentials and is ignored by Git and Docker. The original tracked frontend environment file is removed from the current tree; historical commits are preserved.
 
 ```bash
-# Build and run with Docker Compose
-docker-compose up -d
-
-# Or build manually
-docker build -t teamtasks .
-docker run -d -p 80:80 -p 8001:8001 \
-  -e MONGO_URL=mongodb://your-mongo-host:27017 \
-  -e JWT_SECRET=your-secret \
-  teamtasks
+minikube start -p teamtasks-devops --driver=docker --cpus=2 --memory=4096 --keep-context
+export KUBE_CONTEXT=teamtasks-devops
+export VERSION=$(git rev-parse HEAD)
+docker build --target api --build-arg APP_VERSION="$VERSION" -t teamtasks-api:$VERSION .
+docker build --target web -t teamtasks-web:$VERSION .
+minikube -p teamtasks-devops image load teamtasks-api:$VERSION teamtasks-web:$VERSION
+bash scripts/deploy.sh
+kubectl --context "$KUBE_CONTEXT" -n teamtasks port-forward svc/web 8080:8080
 ```
 
-## API Endpoints
+Open http://localhost:8080 and register a test account. The web client calls `/api` on the same origin; no environment-specific URL is baked into the web bundle. In another terminal:
 
-### Authentication
-- `POST /api/auth/register` - Register new user
-- `POST /api/auth/login` - Login with email/password
-- `POST /api/auth/google` - Login with Google ID token
-- `POST /api/auth/refresh` - Refresh access token
-- `GET /api/auth/me` - Get current user info
+```bash
+EXPECTED_VERSION=$(git rev-parse HEAD) python3 scripts/smoke.py
+kubectl --context teamtasks-devops -n teamtasks port-forward svc/prometheus 9090:9090
+# Separate terminal:
+kubectl --context teamtasks-devops -n teamtasks port-forward svc/jaeger 16686:16686
+```
 
-### Tasks (Personal)
-- `GET /api/tasks` - List user's tasks
-- `POST /api/tasks` - Create new task
-- `PATCH /api/tasks/:id` - Update task
-- `DELETE /api/tasks/:id` - Delete task
+Prometheus: http://localhost:9090 (Targets, Graph and Alerts). Jaeger: http://localhost:16686, service `teamtasks-api`. Request logs: `kubectl --context teamtasks-devops -n teamtasks logs -l app=api --tail=100`. Logs include version, route template, duration, status and trace ID, without request bodies, tokens or query strings. Metrics are on the API's internal `/metrics`, not exposed through the web proxy.
 
-### Groups
-- `GET /api/groups` - List user's groups
-- `POST /api/groups` - Create new group
-- `GET /api/groups/:id` - Get group details
-- `PATCH /api/groups/:id` - Update group
-- `DELETE /api/groups/:id` - Delete group
-- `POST /api/groups/:id/invite` - Invite member
-- `DELETE /api/groups/:id/members/:memberId` - Remove member
+## Optional Docker Compose path
 
-### Group Tasks
-- `GET /api/groups/:id/tasks` - List group tasks
-- `POST /api/groups/:id/tasks` - Create group task
-- `PATCH /api/groups/:id/tasks/:taskId` - Update group task
-- `DELETE /api/groups/:id/tasks/:taskId` - Delete group task
+```bash
+python3 scripts/create_secrets.py
+docker compose up --build -d
+python3 scripts/smoke.py
+```
 
-## Role Permissions
+Compose runs the app and MongoDB without the Kubernetes observability stack. Stop with `docker compose down`; do not add `-v` unless you intend to erase its database. Kubernetes and Compose have separate database volumes.
 
-| Action | Owner | Admin | Member | Viewer |
-|--------|-------|-------|--------|--------|
-| View tasks | ✓ | ✓ | ✓ | ✓ |
-| Create tasks | ✓ | ✓ | ✓ | ✗ |
-| Update tasks | ✓ | ✓ | ✓ | ✗ |
-| Delete tasks | ✓ | ✓ | ✗ | ✗ |
-| Invite members | ✓ | ✓ | ✗ | ✗ |
-| Remove members | ✓ | ✓ | ✗ | ✗ |
-| Edit group | ✓ | ✓ | ✗ | ✗ |
-| Delete group | ✓ | ✗ | ✗ | ✗ |
+## Checks and delivery
 
-## Google OAuth Setup (Optional)
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r backend/requirements-dev.txt
+.venv/bin/python -m pytest backend/tests -q
+.venv/bin/pip-audit -r backend/requirements.txt
+kubectl kustomize deploy/base > /tmp/teamtasks.yaml
+```
 
-1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Create a new project or select existing
-3. Enable the Google+ API
-4. Go to Credentials → Create Credentials → OAuth 2.0 Client IDs
-5. Create clients for:
-   - Web application
-   - iOS (if building for iOS)
-   - Android (if building for Android)
-6. Add the client IDs to your `.env` files
+The GitHub Actions workflow checks backend behavior and dependency advisories, rejects tracked environment files, builds both images for the exact source SHA, deploys them into an isolated kind cluster, and tests registration, login, task CRUD, token refresh and readiness. It uploads runtime evidence. A human promotes a passing revision to the local cluster with the same deployment script. No registry credentials or production kubeconfig are stored in CI. Local image loading is the artifact delivery mechanism.
 
-## Environment Variables
+## Release and rollback
 
-### Backend
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `MONGO_URL` | Yes | MongoDB connection string |
-| `DB_NAME` | Yes | Database name |
-| `JWT_SECRET` | Yes | Secret for JWT access tokens |
-| `JWT_REFRESH_SECRET` | Yes | Secret for JWT refresh tokens |
-| `GOOGLE_CLIENT_ID` | No | Google OAuth client ID |
+API replicas use rolling updates with zero unavailable replicas and readiness gated on MongoDB. Image tags and `/api/health` carry the full source SHA. The web client uses the same release tag. Deployment configuration is rendered by Kustomize, with generated ConfigMap hashes triggering new pods when settings change.
 
-### Frontend
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `EXPO_PUBLIC_BACKEND_URL` | Yes | Backend API URL |
-| `EXPO_PUBLIC_GOOGLE_CLIENT_ID_*` | No | Google OAuth client IDs |
+```bash
+kubectl --context teamtasks-devops -n teamtasks rollout history deployment/api
+kubectl --context teamtasks-devops -n teamtasks rollout undo deployment/api
+kubectl --context teamtasks-devops -n teamtasks rollout undo deployment/web
+kubectl --context teamtasks-devops -n teamtasks rollout status deployment/api
+python3 scripts/smoke.py
+```
 
-## License
+Prefer redeploying a previously tested Git revision with `VERSION=<that-sha>` after building/loading its images, so declared files and live state agree. Emergency `rollout undo` changes live state; reconcile it before the next release. Image rollback does not undo database changes. This project introduces no schema migration.
 
-MIT
+## Credentials and persistence
+
+The deploy script generates random credentials once and creates a Kubernetes Secret only if absent. MongoDB initializes a dedicated `readWrite` application user on the first empty-volume startup. Keep the generated secret file for reproducibility. Replacing an environment variable does not rotate credentials in an existing database: rotate the database user first and then update the Secret and restart API pods. Do not delete the PVC to fix an authentication problem.
+
+For cleanup, `minikube stop -p teamtasks-devops` retains the local cluster and data. Deleting the profile destroys this demo's database. Never run these commands against an unrelated context.

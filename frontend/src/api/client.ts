@@ -1,7 +1,8 @@
 import axios from 'axios';
+import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:8001';
+const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL || (Platform.OS === 'web' ? '' : 'http://localhost:8001');
 
 const apiClient = axios.create({
   baseURL: `${API_URL}/api`,
