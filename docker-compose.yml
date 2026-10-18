@@ -1,38 +1,45 @@
-version: '3.8'
-
 services:
-  app:
+  api:
     build:
       context: .
-      dockerfile: Dockerfile
-    ports:
-      - "80:80"
-      - "8001:8001"
+      target: api
+      args:
+        APP_VERSION: ${APP_VERSION:-dev}
+    env_file: .local/runtime.env
     environment:
-      - MONGO_URL=mongodb://mongodb:27017
-      - DB_NAME=collaborative_todo
-      - JWT_SECRET=${JWT_SECRET:-change-this-to-a-random-secret-key}
-      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET:-change-this-to-another-secret}
-      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      CORS_ORIGINS: http://localhost:8080
     depends_on:
-      - mongodb
-    restart: unless-stopped
-    networks:
-      - app-network
-
-  mongodb:
-    image: mongo:7
-    ports:
-      - "27017:27017"
+      mongo:
+        condition: service_healthy
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8001/api/ready')"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+  web:
+    build:
+      context: .
+      target: web
+    ports: ["127.0.0.1:8080:8080"]
+    depends_on: [api]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+  mongo:
+    image: mongo:7.0
+    env_file: .local/runtime.env
     volumes:
-      - mongodb_data:/data/db
-    restart: unless-stopped
-    networks:
-      - app-network
-
-networks:
-  app-network:
-    driver: bridge
-
+      - mongo-data:/data/db
+      - ./deploy/mongo-init.js:/docker-entrypoint-initdb.d/init.js:ro
+    healthcheck:
+      test: [CMD, mongosh, --quiet, --eval, "quit(db.adminCommand('ping').ok ? 0 : 1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
 volumes:
-  mongodb_data:
+  mongo-data:

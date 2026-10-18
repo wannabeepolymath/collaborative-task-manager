@@ -1,4 +1,6 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, status
+from pymongo.errors import PyMongoError
+from observability import configure_observability
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -11,7 +13,8 @@ from typing import List, Optional
 import uuid
 from datetime import datetime, timedelta
 from passlib.context import CryptContext
-from jose import JWTError, jwt
+import jwt
+from jwt.exceptions import PyJWTError as JWTError
 import httpx
 
 ROOT_DIR = Path(__file__).parent
@@ -19,12 +22,14 @@ load_dotenv(ROOT_DIR / '.env')
 
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
+client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=2000)
 db = client[os.environ.get('DB_NAME', 'collaborative_todo')]
 
 # Security settings
-SECRET_KEY = os.environ.get('JWT_SECRET', 'your-secret-key-change-in-production')
-REFRESH_SECRET = os.environ.get('JWT_REFRESH_SECRET', 'your-refresh-secret-key')
+SECRET_KEY = os.environ['JWT_SECRET']
+REFRESH_SECRET = os.environ['JWT_REFRESH_SECRET']
+if min(len(SECRET_KEY), len(REFRESH_SECRET)) < 32 or SECRET_KEY == REFRESH_SECRET:
+    raise RuntimeError("Set distinct JWT secrets of at least 32 characters")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 REFRESH_TOKEN_EXPIRE_DAYS = 7
@@ -754,7 +759,15 @@ async def root():
 
 @api_router.get("/health")
 async def health():
-    return {"status": "healthy"}
+    return {"status": "healthy", "version": os.environ.get("APP_VERSION", "dev")}
+
+@api_router.get("/ready")
+async def ready():
+    try:
+        await db.command("ping")
+    except PyMongoError:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    return {"status": "ready", "version": os.environ.get("APP_VERSION", "dev")}
 
 
 # Include the router in the main app
@@ -763,7 +776,7 @@ app.include_router(api_router)
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=["*"],
+    allow_origins=[origin.strip() for origin in os.environ.get("CORS_ORIGINS", "http://localhost:8080").split(",") if origin.strip()],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -771,3 +784,7 @@ app.add_middleware(
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
+    if telemetry_provider is not None:
+        telemetry_provider.shutdown()
+
+telemetry_provider = configure_observability(app)

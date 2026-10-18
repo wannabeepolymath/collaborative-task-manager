@@ -1,0 +1,26 @@
+groups:
+- name: teamtasks
+  rules:
+  - alert: ApiScrapeMissing
+    expr: up{job="teamtasks"} == 0 or absent(up{job="teamtasks"})
+    for: 1m
+    labels:
+      severity: critical
+    annotations:
+      summary: 'API metrics unavailable: inspect pods, endpoints and logs'
+  - alert: ApiHighErrorRate
+    expr: sum(rate(teamtasks_http_requests_total{status=~"5.."}[5m])) / clamp_min(sum(rate(teamtasks_http_requests_total[5m])),
+      0.001) > 0.01
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: 'More than 1% server errors: inspect traces, database and last release'
+  - alert: ApiHighLatency
+    expr: histogram_quantile(0.95, sum by (le) (rate(teamtasks_http_request_duration_seconds_bucket[5m])))
+      > 0.5
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: 'p95 API latency exceeds 500ms: inspect resources and dependencies'
